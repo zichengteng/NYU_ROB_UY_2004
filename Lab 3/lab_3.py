@@ -59,109 +59,88 @@ class InverseKinematics(Node):
         self.joint_velocities = None
         self.target_joint_positions = None
         self.counter = 0
-        # Options: 'forward', 'forward_fast', 'rotate', 'square'
-        self.gait_mode = 'square'
-        self.counter_step = 2 if self.gait_mode == 'forward_fast' else 1
-        self.gait_counter_steps = {
-            'forward': 1,
-            'forward_fast': 2,
-            'rotate': 2,
-        }
-        self.debug_log_stride = 25
-        self.debug_counter = 0
 
         # Trotting gate positions
         ################################################################################################
         # TODO: Implement the trotting gait
         ################################################################################################
+            
+        touch_down_position = np.array([0.03, 0.0, -0.14])
+        stand_position_1 = np.array([0.015, 0.0, -0.14])
+        stand_position_2 = np.array([0.0, 0.0, -0.14])
+        stand_position_3 = np.array([-0.015, 0.0, -0.14])
+        liftoff_position = np.array([-0.03, 0.0, -0.14])
+        mid_swing_position = np.array([0.0, 0.0, -0.08])
+        
+        ## trotting
+        # TODO: Implement each leg’s trajectory in the trotting gait.
+        rf_ee_offset = np.array([0.06, -0.09, 0])
+        rf_ee_triangle_positions = np.array([
+            ################################################################################################
+            # TODO: Implement the trotting gait
+            ################################################################################################
+            touch_down_position,
+            stand_position_1,
+            stand_position_2,
+            stand_position_3,
+            liftoff_position,
+            mid_swing_position,
+        ]) + rf_ee_offset
+        
+        lf_ee_offset = np.array([0.06, 0.09, 0])
+        lf_ee_triangle_positions = np.array([
+            ################################################################################################
+            # TODO: Implement the trotting gait
+            ################################################################################################
+            liftoff_position,
+            mid_swing_position,
+            touch_down_position,
+            stand_position_1,
+            stand_position_2,
+            stand_position_3,
+
+        ]) + lf_ee_offset
+        
+        rb_ee_offset = np.array([-0.11, -0.09, 0])
+        rb_ee_triangle_positions = np.array([
+            ################################################################################################
+            # TODO: Implement the trotting gait
+            ################################################################################################
+            liftoff_position,
+            mid_swing_position,
+            touch_down_position,
+            stand_position_1,
+            stand_position_2,
+            stand_position_3,
+
+        ]) + rb_ee_offset
+        
+        lb_ee_offset = np.array([-0.11, 0.09, 0])
+        lb_ee_triangle_positions = np.array([
+            ################################################################################################
+            # TODO: Implement the trotting gait
+            ################################################################################################
+            touch_down_position,
+            stand_position_1,
+            stand_position_2,
+            stand_position_3,
+            liftoff_position,
+            mid_swing_position,
+        ]) + lb_ee_offset
+
+
+        self.ee_triangle_positions = [rf_ee_triangle_positions, lf_ee_triangle_positions, rb_ee_triangle_positions, lb_ee_triangle_positions]
         self.fk_functions = [self.fr_leg_fk, self.fl_leg_fk, self.br_leg_fk, self.bl_leg_fk]
-        self.gait_caches = {}
-        self.gait_counters = {}
 
-        if self.gait_mode == 'square':
-            # Repeat: move forward (one edge) then rotate in-place (one corner).
-            self.square_sequence = [('forward_fast', 8), ('rotate', 3)] * 4
-            self.square_segment_index = 0
-            self.square_segment_step = 0
-
-            for mode in ['forward_fast', 'rotate']:
-                joint_cache, ee_cache = self.precompute_gait_cache(mode)
-                self.gait_caches[mode] = (joint_cache, ee_cache)
-                self.gait_counters[mode] = 0
-
-            # Keep these members valid for existing debug prints.
-            self.ee_triangle_positions = self.build_gait_waypoint_sequences('forward_fast')
-            self.target_joint_positions_cache, self.target_ee_cache = self.gait_caches['forward_fast']
-        else:
-            self.ee_triangle_positions = self.build_gait_waypoint_sequences(self.gait_mode)
-            self.target_joint_positions_cache, self.target_ee_cache = self.cache_target_joint_positions()
-
+        self.target_joint_positions_cache, self.target_ee_cache = self.cache_target_joint_positions()
         print(f'shape of target_joint_positions_cache: {self.target_joint_positions_cache.shape}')
         print(f'shape of target_ee_cache: {self.target_ee_cache.shape}')
 
 
         self.pd_timer_period = 1.0 / 200  # 200 Hz
-        self.ik_timer_period = 1.0 / 100   # 100 Hz
+        self.ik_timer_period = 1.0 / 100   # 10 Hz
         self.pd_timer = self.create_timer(self.pd_timer_period, self.pd_timer_callback)
         self.ik_timer = self.create_timer(self.ik_timer_period, self.ik_timer_callback)
-
-    def build_triangle_points(self, base_width=0.10, height=0.09, base_center=np.array([0.0, 0.0, -0.14])):
-        x_half = base_width / 2.0
-        z_base = base_center[2]
-        y_base = base_center[1]
-        apex_z = z_base + height
-        return {
-            'touch_down': np.array([x_half, y_base, z_base]),
-            'stand_1': np.array([0.5 * x_half, y_base, z_base]),
-            'stand_2': np.array([0.0, y_base, z_base]),
-            'stand_3': np.array([-0.5 * x_half, y_base, z_base]),
-            'liftoff': np.array([-x_half, y_base, z_base]),
-            'mid_swing': np.array([0.0, y_base, apex_z]),
-        }
-
-    def build_gait_waypoint_sequences(self, gait_mode):
-        if gait_mode == 'forward_fast':
-            points = self.build_triangle_points(base_width=0.14, height=0.09)
-        elif gait_mode == 'rotate':
-            points = self.build_triangle_points(base_width=0.12, height=0.08)
-        else:
-            points = self.build_triangle_points(base_width=0.10, height=0.09)
-
-        td = points['touch_down']
-        s1 = points['stand_1']
-        s2 = points['stand_2']
-        s3 = points['stand_3']
-        lo = points['liftoff']
-        ms = points['mid_swing']
-
-        forward_a = np.array([td, s1, s2, s3, lo, ms])
-        forward_b = np.array([s3, lo, ms, td, s1, s2])
-        reverse_a = np.array([lo, s3, s2, s1, td, ms])
-        reverse_b = np.array([s1, td, ms, lo, s3, s2])
-
-        rf_ee_offset = np.array([0.06, -0.09, 0.0])
-        lf_ee_offset = np.array([0.06, 0.09, 0.0])
-        rb_ee_offset = np.array([-0.11, -0.09, 0.0])
-        lb_ee_offset = np.array([-0.11, 0.09, 0.0])
-
-        if gait_mode in ['forward', 'forward_fast']:
-            rf = forward_a + rf_ee_offset
-            lf = forward_b + lf_ee_offset
-            rb = forward_b + rb_ee_offset
-            lb = forward_a + lb_ee_offset
-        elif gait_mode == 'rotate':
-            rf = forward_a + rf_ee_offset
-            rb = forward_b + rb_ee_offset
-            lf = reverse_b + lf_ee_offset
-            lb = reverse_a + lb_ee_offset
-        else:
-            raise ValueError(f'Unknown gait_mode: {gait_mode}')
-
-        return [rf, lf, rb, lb]
-
-    def precompute_gait_cache(self, gait_mode):
-        self.ee_triangle_positions = self.build_gait_waypoint_sequences(gait_mode)
-        return self.cache_target_joint_positions()
 
     def fr_leg_fk(self, theta):
         T_RF_0_1 = translation(0.07500, -0.08350, 0) @ rotation_x(1.57080) @ rotation_z(theta[0])
@@ -217,11 +196,11 @@ class InverseKinematics(Node):
         error = np.asarray(current_position) - np.asarray(desired_position)
         return float(np.dot(error, error))
 
+
     def inverse_kinematics_single_leg(self, target_ee, leg_index, initial_guess=[0, 0, 0]):
         self.leg_forward_kinematics = self.fk_functions[leg_index]
         ################################################################################################
         # TODO: implement interpolation for all 4 legs here
-        ################################################################################################
         result = scipy.optimize.minimize(
             self.get_error_leg,
             np.asarray(initial_guess, dtype=float),
@@ -229,11 +208,12 @@ class InverseKinematics(Node):
             method='BFGS'
         )
         return result.x
+        ################################################################################################
+    
 
     def interpolate_triangle(self, t, leg_index):
         ################################################################################################
         # TODO: implement interpolation for all 4 legs here
-        ################################################################################################
         triangle_positions = self.ee_triangle_positions[leg_index]
         num_waypoints = triangle_positions.shape[0]
 
@@ -245,6 +225,7 @@ class InverseKinematics(Node):
         start_point = triangle_positions[segment_index % num_waypoints]
         end_point = triangle_positions[(segment_index + 1) % num_waypoints]
         return (1.0 - segment_progress) * start_point + segment_progress * end_point
+        ################################################################################################        
 
     def cache_target_joint_positions(self):
         # Calculate and store the target joint positions for a cycle and all 4 legs
@@ -269,51 +250,24 @@ class InverseKinematics(Node):
         return target_joint_positions_cache, target_ee_cache
 
     def get_target_joint_positions(self):
-        if self.gait_mode == 'square':
-            return self.get_square_target_joint_positions()
-
         target_joint_positions = self.target_joint_positions_cache[self.counter]
         target_ee = self.target_ee_cache[self.counter]
-        self.counter += self.counter_step
+        self.counter += 1
         if self.counter >= self.target_joint_positions_cache.shape[0]:
-            self.counter = self.counter % self.target_joint_positions_cache.shape[0]
-        return target_ee, target_joint_positions
-
-    def get_square_target_joint_positions(self):
-        mode, segment_cycles = self.square_sequence[self.square_segment_index]
-        joint_cache, ee_cache = self.gait_caches[mode]
-        mode_step = self.gait_counter_steps[mode]
-
-        idx = self.gait_counters[mode]
-        target_joint_positions = joint_cache[idx]
-        target_ee = ee_cache[idx]
-        self.gait_counters[mode] = (idx + mode_step) % joint_cache.shape[0]
-
-        self.square_segment_step += 1
-        steps_per_cycle = int(np.ceil(joint_cache.shape[0] / mode_step))
-        segment_total_steps = segment_cycles * steps_per_cycle
-        if self.square_segment_step >= segment_total_steps:
-            prev_mode = mode
-            self.square_segment_step = 0
-            self.square_segment_index = (self.square_segment_index + 1) % len(self.square_sequence)
-            next_mode = self.square_sequence[self.square_segment_index][0]
-            if next_mode != prev_mode:
-                self.get_logger().info(f'Square gait switch: {prev_mode} -> {next_mode}')
-
+            self.counter = 0
         return target_ee, target_joint_positions
 
     def ik_timer_callback(self):
         if self.joint_positions is not None:
             target_ee, self.target_joint_positions = self.get_target_joint_positions()
             current_ee = self.forward_kinematics(self.joint_positions)
-            self.debug_counter += 1
-            if self.debug_counter % self.debug_log_stride == 0:
-                self.get_logger().info(
-                    f'Mode: {self.gait_mode}, Target EE: {target_ee}, \
-                    Current EE: {current_ee}, \
-                    Target Angles: {self.target_joint_positions}, \
-                    Target Angles to EE: {self.forward_kinematics(self.target_joint_positions)}, \
-                    Current Angles: {self.joint_positions}')
+
+            self.get_logger().info(
+                f'Target EE: {target_ee}, \
+                Current EE: {current_ee}, \
+                Target Angles: {self.target_joint_positions}, \
+                Target Angles to EE: {self.forward_kinematics(self.target_joint_positions)}, \
+                Current Angles: {self.joint_positions}')
 
     def pd_timer_callback(self):
         if self.target_joint_positions is not None:
